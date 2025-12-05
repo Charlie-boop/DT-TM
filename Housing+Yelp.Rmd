@@ -1,0 +1,226 @@
+---
+title: "Decision Trees and Text Mining"
+author: "Carlos Espinoza"
+date: "2025-11-17"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Libraries
+```{r}
+library(rpart) 
+library(rpart.plot) 
+library(caret) 
+library(tidyverse)
+library(tidymodels)
+library(tm) 
+library(SnowballC) 
+library(wordcloud) 
+library(RColorBrewer) 
+library(syuzhet) 
+```
+
+#Question 1 - Decision Trees
+```{r}
+#Loading the Boston Housing Data
+bostondata <-  read.csv("D:/Documents/US Docs/Fall 2025/BZAN 6350/Homework Exercises/HomeWork 3 Data/boston_house_prices.csv",)
+summary(bostondata)
+head(bostondata)
+```
+
+```{r}
+#Specifications
+bostontree <- decision_tree() |>
+  set_engine("rpart") |>
+  set_mode("classification")
+
+#Factors
+bostondata$MEDV <- cut(
+  bostondata$MEDV,
+  breaks = c(0, 15, 30, 50),
+  include.lowest = TRUE,
+  labels = c("Median Home Value: 0-15", "Median Home Value: 15-30", "Median Home Value: 30-50")
+)
+
+#Applying specifications
+bostontree_train <- bostontree |>
+  fit(MEDV ~ ., data = bostondata)
+
+```
+
+```{r}
+#Creating Training and Testing DataSets
+set.seed(123) #for reproducibility
+bostontree_split <-  initial_split(bostondata, prop = 0.8)
+bostontree_train_split <- training(bostontree_split)
+bostontree_test_split <- testing(bostontree_split)
+
+#Proportion Verification
+round(nrow(bostontree_train_split) / nrow(bostondata), 2) == 0.80
+round(nrow(bostontree_test_split) / nrow(bostondata), 2) == 0.20
+
+# Create the balanced data split
+bostontree_split <- initial_split(bostondata, prop = 0.75, strata = MEDV)
+# Build the specification of the model
+tree_spec <- decision_tree() |> set_engine("rpart") |>  set_mode("classification")
+  
+
+# Train the model
+trained_bostontree <- tree_spec |>
+  fit( formula = MEDV ~ ., 
+      data = training(bostontree_split))
+
+trained_bostontree
+```
+
+```{r}
+#Fitting the model
+boston_prediction_model <- tree_spec |> 
+  fit(formula = MEDV ~ ., data = bostontree_train_split)
+
+predictions <- predict(boston_prediction_model,
+                   new_data = bostontree_test_split  )
+
+# Add the true outcomes
+added_outcomes <- predictions |>
+  mutate(true_class = bostontree_test_split$MEDV)
+
+# Print the first lines of the result
+head(added_outcomes)
+
+# Predictions off the testing data
+boston_cfmatrix <- conf_mat(data = added_outcomes,
+                       estimate = .pred_class,
+                       truth = true_class)
+boston_cfmatrix
+
+#Verifying predictions
+
+boston_accuracy <-  accuracy(added_outcomes,
+                           estimate = .pred_class,
+                           truth = true_class)
+boston_accuracy
+```
+```{r}
+#extract the prediction tree
+extracted_prediction <- extract_fit_engine(boston_prediction_model)
+
+#plotting the tree
+rpart.plot(extracted_prediction, roundint = FALSE)
+#From this tree, I can gather that 65% of the homes have a median value sitting around $15,000 and $30,0000 range. The most valuable homes seem to be best predicted by the number of rooms followed by low poverty, low crime and low pollution. Conversely, more crime and lower status more reliably predict low-value housing.
+```
+#Question 2 - Text Mining
+```{r}
+#loading the yelp data
+yelptext <-  readLines("D:/Documents/US Docs/Fall 2025/BZAN 6350/Homework Exercises/HomeWork 3 Data/yelp_labelled.csv") 
+```
+
+```{r}
+#Pre-Processing
+
+# Load the data as a corpus 
+TextDoc <- Corpus(VectorSource(yelptext)) 
+ #Replacing "/", "@" and "|" with space 
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x)) 
+TextDoc <- tm_map(TextDoc, toSpace, "/") 
+TextDoc <- tm_map(TextDoc, toSpace, "@") 
+TextDoc <- tm_map(TextDoc, toSpace, "\\|") 
+# Convert the text to lower case 
+TextDoc <- tm_map(TextDoc, content_transformer(tolower)) 
+
+# Remove numbers 
+TextDoc <- tm_map(TextDoc, removeNumbers) 
+
+# Remove english common stop words 
+TextDoc <- tm_map(TextDoc, removeWords, stopwords("english")) 
+
+# Remove your own stop word 
+# specify your custom stop words as a character vector 
+TextDoc <- tm_map(TextDoc, removeWords, c("beer", "order", "get", "another", "everything"))  
+
+# Remove punctuation 
+TextDoc <- tm_map(TextDoc, removePunctuation) 
+
+# Eliminate extra white spaces 
+TextDoc <- tm_map(TextDoc, stripWhitespace) 
+
+# Text stemming - which reduces words to their root form 
+TextDoc <- tm_map(TextDoc, stemDocument) 
+ 
+# Build a term-document matrix 
+TextDoc_dtm <- TermDocumentMatrix(TextDoc) 
+dtm_m <- as.matrix(TextDoc_dtm) 
+
+# Sort by decreasing value of frequency 
+dtm_v <- sort(rowSums(dtm_m),decreasing=TRUE) 
+dtm_d <- data.frame(word = names(dtm_v),freq=dtm_v) 
+
+# Display the top 5 most frequent words 
+head(dtm_d, 5) 
+```
+```{r}
+#Sentiment Analysis
+
+# run nrc sentiment analysis to return data frame with each row classified as one of the following 
+# emotions, rather than a score:  
+# anger, anticipation, disgust, fear, joy, sadness, surprise, trust  
+# It also counts the number of positive and negative emotions found in each row 
+d<-get_nrc_sentiment(as.character(yelptext)) 
+
+# head(d,10) - to see top 10 lines of the get_nrc_sentiment dataframe 
+head (d,10) 
+
+#transpose 
+td<-data.frame(t(d)) 
+
+#The function rowSums computes column sums across rows for each level of a grouping variable. 
+td_new <- data.frame(rowSums(td[2:253])) 
+
+#Transformation and cleaning 
+names(td_new)[1] <- "count" 
+td_new <- cbind("sentiment" = rownames(td_new), td_new) 
+rownames(td_new) <- NULL 
+td_new2<-td_new[1:8,] 
+
+#Plot One - count of words associated with each sentiment 
+quickplot(sentiment, data=td_new2, weight=count, geom="bar", fill=sentiment, 
+ylab="count")+ggtitle("Review sentiments") 
+
+
+```
+
+```{r}
+# Find associations  
+findAssocs(TextDoc_dtm, terms = c("slow","wait","cold", "lukewarm"), corlimit = 0.05) 
+
+# Find associations for words that occur at least 50 times 
+findAssocs(TextDoc_dtm, terms = findFreqTerms(TextDoc_dtm, lowfreq = 50), 
+corlimit = 0.25)
+
+```
+
+
+```{r}
+#Build a Word cloud
+
+set.seed(1234) 
+wordcloud(words = dtm_d$word, freq = dtm_d$freq, min.freq = 5, 
+max.words=100, random.order=FALSE, rot.per=0.40,  
+colors=brewer.pal(8, "Dark2"))
+```
+
+
+
+```{r}
+#Feedback and Recommendations
+
+#From what I can see, the reception towards the restaurant is largely positive, with the three strongest emotions represented being trust, joy and anticipation. The most prominent words used are "place", "food", "good", "service" and "great". This tells me that the customers are generally pleased with the location, the food and service. 
+
+#That said, there is still room for improvement, as the reviews are not impeccable. I can see that some people think of the service as "slow", think it could be "better". Examining associations with the more generally negative words also reveal that some customers may have had to "wait" excessively, had a "rude" server, and may have had "bad" experiences with staff and/or other patrons.
+#Clearly the weaker points in the restaurant's operations lie in service, speed and etiquette. Should these pain points be addressed, surely the general enthusiasm towards the restaurant will improve. It would even serve to assure the customers that their trust towards the brand is not misplaced and likely further feed their positive feelings.
+
+```
+
